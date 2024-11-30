@@ -1,4 +1,4 @@
-"""Example switch platform."""
+import asyncio
 
 from homeassistant.core import HomeAssistant
 from homeassistant.const import STATE_ON, STATE_OFF
@@ -6,51 +6,98 @@ from homeassistant.components.switch import (
     SwitchEntity,
     DOMAIN as ENTITY_DOMAIN,
 )
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import (
-    DOMAIN,
-    MintEntity,
-    async_setup_gateway,
-    _LOGGER
-)
-
-
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    cfg = {**config_entry.data, **config_entry.options}
-    await async_setup_platform(hass, cfg, async_setup_platform, async_add_entities)
+from .const import *
 
 async def async_setup_platform(hass: HomeAssistant, config, async_add_entities, discovery_info=None):
-    hass.data[DOMAIN]['add_entities'][ENTITY_DOMAIN] = async_add_entities
-    await async_setup_gateway(hass)
+    coordinator = hass.data[DOMAIN][CONF_COORDINATOR]
+    switches = []
+    for room in coordinator.data['devices']['rootJson']['rooms']:
+        for rdevice in room['rdevices']:
+            for channel in rdevice['channel']:
+                if channel['subtype'] == 'switch':
+                    switches.append(MintSwitch(coordinator, room['rid'], rdevice['did'], channel['cid']))
+    async_add_entities(switches)
 
 
-class MintSwitchEntity(MintEntity, SwitchEntity):
+class MintSwitch(CoordinatorEntity, SwitchEntity):
+    def __init__(self, coordinator, rid, did, cid):
+        super().__init__(coordinator)
+        self.rid = rid
+        self.did = did
+        self.cid = cid
+    
     @property
     def is_on(self):
-        return self._attr_state == 'on'
+        return self.channel_status['action'] == 'open'
+
     @property
     def hidden(self):
         return False
 
     async def async_turn_switch(self, on=True, **kwargs):
-        data = await self.coordinator.gateway.trigger('open' if on else 'close', self._device.did, self.data['ccmdid'])
+        data = await self.coordinator.gateway.trigger('open' if on else 'close', self.did, self.channel_data['ccmdid'])
         if data:
-            self.status = 'open' if on else 'close'
+            self.channel_status['action'] = 'open' if on else 'close'
             self.async_write_ha_state()
-            self._handle_coordinator_update()
-            return True
-        return False
+            await asyncio.sleep(1)
+            await self.coordinator.async_request_refresh()
 
     async def async_turn_on(self, **kwargs):
-        return await self.async_turn_switch(True)
+        await self.async_turn_switch(True)
 
     async def async_turn_off(self, **kwargs):
-        return await self.async_turn_switch(False)
+        await self.async_turn_switch(False)
+    
+    @property
+    def room_data(self):
+        for room in self.coordinator.data['devices']['rootJson']['rooms']:
+            if self.rid == room['rid']:
+                return room
 
-    def _handle_coordinator_update(self):
-        self._attr_state = 'off'
-        if self.status == 'open':
-            self._attr_state = 'on'
-        elif self.status == 'close':
-            self._attr_state = 'off'
-        self.async_write_ha_state()
+    @property
+    def device_data(self):
+        for device in self.room_data['rdevices']:
+            if self.did == device['did']:
+                return device
+
+    @property
+    def channel_data(self):
+        for channel in self.device_data['channel']:
+            if self.cid == channel['cid']:
+                return channel
+
+    @property
+    def device_status(self):
+        for device in self.coordinator.data['status']['devices']:
+            if self.did == device['sourceId']:
+                return device
+            
+    @property
+    def channel_status(self):
+        for report in self.device_status['report']:
+            if report['cid'] == self.cid:
+                return report
+
+    @property
+    def unique_id(self) -> str:
+        return self.channel_data['ccmdid']
+    
+    @property
+    def name(self) -> str:
+        return self.channel_data['cname']
+    
+    @property
+    def device_id(self) -> str:
+        return f'{self.channel_data["subtype"]}_{self.channel_data["ccmdid"]}'
+
+    @property
+    def device_info(self) -> str:
+        return  {
+            'identifiers': {(DOMAIN, self.device_id)},
+            'name': self.device_data['name'],
+            'model': self.device_data['dtype'],
+            'manufacturer': self.device_data['dfactory'],
+            'sw_version': self.device_data['dversion'],
+        }
