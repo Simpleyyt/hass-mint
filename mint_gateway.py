@@ -40,12 +40,14 @@ class MintGateway:
         plaintext = unpad(decrypted_padded_plaintext, AES.block_size)
         return plaintext.decode()
 
-    def getip(self):
+    async def getip(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.bind(("0.0.0.0", self.BROADCAST_UDP_PORT))
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.settimeout(self.TIMEOUT)
+            #sock.settimeout(self.TIMEOUT)
+            sock.setblocking(False)
+            loop = asyncio.get_event_loop()
             cmd = {
                 "Command": "getip",
                 "phoneNum": self.phone_number,
@@ -53,10 +55,10 @@ class MintGateway:
             }
             ciphertext = self.aes_encode(json.dumps(cmd))
             LOGGER.error('Mint getip request %s %s', json.dumps(cmd), ciphertext)
-            sock.sendto(ciphertext, (self.BROADCAST_UDP_IP, self.BROADCAST_UDP_PORT))
-            data, addr = sock.recvfrom(self.BUFFER_SIZE)
+            await loop.sock_sendto(sock, ciphertext, (self.BROADCAST_UDP_IP, self.BROADCAST_UDP_PORT))
+            data, addr = await loop.sock_recvfrom(sock, self.BUFFER_SIZE)
             if data == ciphertext:
-                data, addr = sock.recvfrom(self.BUFFER_SIZE)
+                data, addr = await loop.sock_recvfrom(sock, self.BUFFER_SIZE)
         finally:
             sock.close()
         LOGGER.error(data)
@@ -68,7 +70,7 @@ class MintGateway:
     async def send_command(self, cmd):
         retry = False
         if not self.ip or not self.port:
-            self.getip()
+            await self.getip()
         try:
             code, data = await self._send_command(cmd)
             if code != 0 or not data:
@@ -77,7 +79,7 @@ class MintGateway:
             LOGGER.error("Send command exception %s", e)
             retry = True
         if retry:
-            self.getip()
+            await self.getip()
             code, data = await self._send_command(cmd)
         return code, data
     
@@ -89,11 +91,13 @@ class MintGateway:
         data = None
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.settimeout(self.TIMEOUT)
+            sock.setblocking(False)
+            loop = asyncio.get_event_loop()
+            #sock.settimeout(self.TIMEOUT)
             LOGGER.error('connect %s %s', self.ip, self.port)
-            sock.connect((self.ip, self.port))
-            sock.send(json.dumps(cmd).encode())
-            rsp = sock.recv(self.BUFFER_SIZE).decode()
+            await loop.sock_connect(sock, (self.ip, self.port))
+            await loop.sock_sendall(sock, json.dumps(cmd).encode())
+            rsp = (await loop.sock_recv(sock, self.BUFFER_SIZE)).decode()
             LOGGER.error('Mint %s response %s', cmd['Command'], rsp)
             dec = json.JSONDecoder()
             rsp_code, index = dec.raw_decode(rsp)
@@ -103,7 +107,8 @@ class MintGateway:
                 sock.close()
                 return code, data
             if index == len(rsp):
-                rsp = sock.recv(self.BUFFER_SIZE).decode()
+                await asyncio.sleep(0.5)
+                rsp = (await loop.sock_recv(sock, self.BUFFER_SIZE)).decode()
                 LOGGER.error('Mint %s response %s', cmd['Command'], rsp)
                 index = 0
         finally:

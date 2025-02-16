@@ -101,3 +101,7 @@ class MintSwitch(CoordinatorEntity, SwitchEntity):
             'manufacturer': self.device_data['dfactory'],
             'sw_version': self.device_data['dversion'],
         }
+
+    @property
+    def available(self) -> bool:
+        return True
