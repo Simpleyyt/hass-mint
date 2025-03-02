@@ -31,3 +31,5 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 LOGGER = logging.getLogger(__name__)
+
+GETIP_INTERVAL_S = 60
