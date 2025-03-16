@@ -69,10 +69,10 @@ class MintGateway:
         except Exception as e:
             LOGGER.error("Mint getip error %s", e)
 
-    async def send_command(self, cmd):
+    async def send_command(self, cmd, need_resp=True):
         error = False
         try:
-            code, data = await self._send_command(cmd)
+            code, data = await self._send_command(cmd, need_resp)
             if code != 0 or not data:
                 error = True
         except Exception as e:
@@ -81,7 +81,21 @@ class MintGateway:
             raise e
         return code, data
     
-    async def _send_command(self, cmd):
+    async def recv_one_json(self, sock, buffer):
+        loop = asyncio.get_event_loop()
+        index = 0
+        json_obj = None
+        dec = json.JSONDecoder()
+        while index == 0:
+            buffer += (await asyncio.wait_for(loop.sock_recv(sock, self.BUFFER_SIZE), self.TIMEOUT)).decode()
+            try:
+                json_obj, index = dec.raw_decode(buffer)
+            except:
+                pass
+        return json_obj, buffer[index:]
+
+    
+    async def _send_command(self, cmd, need_resp=True):
         cmd = cmd | {
             "phoneNum": self.phone_number,
             "UsrDataSN": str(int(time.time() * 1000))
@@ -95,23 +109,19 @@ class MintGateway:
             LOGGER.info('Mint connect %s %s', self.ip, self.port)
             await loop.sock_connect(sock, (self.ip, self.port))
             await loop.sock_sendall(sock, json.dumps(cmd).encode())
-            rsp = (await asyncio.wait_for(loop.sock_recv(sock, self.BUFFER_SIZE), self.TIMEOUT)).decode()
-            LOGGER.info('Mint %s response %s', cmd['Command'], rsp)
-            dec = json.JSONDecoder()
-            rsp_code, index = dec.raw_decode(rsp)
-            code = int(rsp_code['returnCode'])
+            buffer = ""
+            result, buffer = await self.recv_one_json(sock, buffer)
+            LOGGER.info('Mint %s response result %s', cmd['Command'], result)
+            code = int(result['returnCode'])
             if code != 0:
-                LOGGER.error('Mint %s response %s', cmd['Command'], rsp)
+                LOGGER.error('Mint %s response result %s', cmd['Command'], result)
                 sock.close()
                 return code, data
-            if index == len(rsp):
-                await asyncio.sleep(0.5)
-                rsp = (await asyncio.wait_for(loop.sock_recv(sock, self.BUFFER_SIZE), self.TIMEOUT)).decode()
-                LOGGER.info('Mint %s response %s', cmd['Command'], rsp)
-                index = 0
+            if need_resp:
+                data, buffer = await self.recv_one_json(sock, buffer)
+                LOGGER.info('Mint %s response data %s', cmd['Command'], data)
         finally:
             sock.close()
-        data, index = dec.raw_decode(rsp[index:])
         return code, data
     
     async def getallstatus(self):
@@ -131,5 +141,5 @@ class MintGateway:
                     "destinationId": unique_id,
                     "ccmdid": ccmdid
                 }]
-            })
-        return data
+            }, False)
+        return code == 0

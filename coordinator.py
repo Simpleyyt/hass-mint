@@ -1,4 +1,5 @@
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+
 from .const import *
 from .mint_gateway import MintGateway
 import time

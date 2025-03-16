@@ -37,8 +37,8 @@ class MintSwitch(CoordinatorEntity, SwitchEntity):
         return False
 
     async def async_turn_switch(self, on=True, **kwargs):
-        data = await self.coordinator.gateway.trigger('open' if on else 'close', self.did, self.channel_data['ccmdid'])
-        if data:
+        succ = await self.coordinator.gateway.trigger('open' if on else 'close', self.did, self.channel_data['ccmdid'])
+        if succ:
             self.channel_status['action'] = 'open' if on else 'close'
             self.async_write_ha_state()
             await asyncio.sleep(1)
